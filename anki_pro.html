@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Anki Web Pro</title>
+
+<style>
+:root {
+    --bg:#f1f5f9;
+    --card:#fff;
+    --primary:#2563eb;
+    --good:#22c55e;
+    --mid:#eab308;
+    --bad:#ef4444;
+}
+body{
+    margin:0;
+    font-family:Segoe UI,Tahoma;
+    background:var(--bg);
+}
+.container{
+    max-width:1100px;
+    margin:auto;
+    padding:20px;
+}
+h2,h3{margin:5px 0}
+
+/* DASHBOARD */
+.dashboard{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+    gap:15px;
+    margin-bottom:20px;
+}
+.stat{
+    background:var(--card);
+    padding:15px;
+    border-radius:12px;
+    box-shadow:0 2px 8px rgba(0,0,0,.1);
+}
+.stat span{
+    font-size:1.6rem;
+    font-weight:bold;
+}
+
+/* FILTER */
+.filters{
+    display:flex;
+    gap:10px;
+    margin-bottom:20px;
+}
+select,button,input{
+    padding:8px;
+    border-radius:6px;
+    border:1px solid #ccc;
+}
+button{
+    background:var(--primary);
+    color:#fff;
+    cursor:pointer;
+    border:none;
+}
+
+/* CARD */
+.card-container{
+    perspective:1000px;
+    height:260px;
+    margin-bottom:15px;
+}
+.card{
+    width:100%;
+    height:100%;
+    position:relative;
+    transition:.6s;
+    transform-style:preserve-3d;
+    cursor:pointer;
+}
+.card.flipped{transform:rotateY(180deg)}
+.face{
+    position:absolute;
+    inset:0;
+    background:white;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:1.3rem;
+    border-radius:15px;
+    box-shadow:0 4px 15px rgba(0,0,0,.15);
+    padding:20px;
+    backface-visibility:hidden;
+}
+.back{transform:rotateY(180deg);border:2px solid var(--primary)}
+
+.controls{
+    display:flex;
+    gap:10px;
+}
+.controls button{flex:1}
+.bad{background:var(--bad)}
+.mid{background:var(--mid)}
+.good{background:var(--good)}
+.hidden{display:none}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<h2>📊 Dashboard</h2>
+<div class="dashboard">
+    <div class="stat">📦 الكل<br><span id="sTotal">0</span></div>
+    <div class="stat">⏰ جاهز<br><span id="sDue">0</span></div>
+    <div class="stat">📘 اليوم<br><span id="sToday">0</span></div>
+    <div class="stat">🔥 Streak<br><span id="sStreak">0</span></div>
+</div>
+
+<div class="filters">
+    <select id="tagFilter" onchange="startSession()">
+        <option value="all">كل الـ Tags</option>
+    </select>
+    <input type="file" id="csv" accept=".csv">
+    <button onclick="resetAll()">مسح الكل</button>
+</div>
+
+<div id="study" class="hidden">
+    <div class="card-container">
+        <div class="card" id="card" onclick="flip()">
+            <div class="face" id="front"></div>
+            <div class="face back" id="back"></div>
+        </div>
+    </div>
+    <div class="controls">
+        <button class="bad" onclick="review(1)">صعب</button>
+        <button class="mid" onclick="review(2)">متوسط</button>
+        <button class="good" onclick="review(3)">سهل</button>
+    </div>
+</div>
+
+<p id="empty" class="hidden">لا توجد بطاقات حالياً</p>
+
+</div>
+
+<script>
+let cards = JSON.parse(localStorage.getItem("anki_cards")) || [];
+let stats = JSON.parse(localStorage.getItem("anki_stats")) || {
+    today:0, streak:0, last:new Date().toDateString()
+};
+let queue=[];
+
+/* CSV */
+csv.onchange=e=>{
+    const r=new FileReader();
+    r.onload=ev=>{
+        ev.target.result.split("\n").forEach(l=>{
+            let [q,a,tags]=l.split(",");
+            if(!q||!a)return;
+            cards.push({
+                id:Date.now()+Math.random(),
+                q:q.trim(),
+                a:a.trim(),
+                tags:tags?tags.split("|").map(t=>t.trim()):[],
+                ef:2.5, int:0, rep:0,
+                next:Date.now()
+            });
+        });
+        save();
+        loadTags();
+        startSession();
+    };
+    r.readAsText(e.target.files[0]);
+};
+
+/* SESSION */
+function startSession(){
+    const tag=tagFilter.value;
+    queue=cards.filter(c=>
+        c.next<=Date.now() &&
+        (tag==="all"||c.tags.includes(tag))
+    );
+    queue.length?show():showEmpty();
+    updateStats();
+}
+function show(){
+    study.classList.remove("hidden");
+    empty.classList.add("hidden");
+    const c=queue[0];
+    front.innerText=c.q;
+    back.innerText=c.a;
+    card.classList.remove("flipped");
+}
+function showEmpty(){
+    study.classList.add("hidden");
+    empty.classList.remove("hidden");
+}
+
+/* REVIEW SM2 */
+function review(g){
+    let c=queue.shift();
+    if(g<2){c.rep=0;c.int=1}
+    else{
+        c.rep++;
+        c.int=c.rep==1?1:c.rep==2?6:Math.round(c.int*c.ef);
+    }
+    c.ef=Math.max(1.3,c.ef+(0.1-(3-g)*(0.08+(3-g)*0.02)));
+    c.next=Date.now()+c.int*86400000;
+
+    const today=new Date().toDateString();
+    if(stats.last!==today){stats.today=0;stats.streak++;stats.last=today}
+    stats.today++;
+
+    save();
+    queue.length?show():startSession();
+}
+
+/* HELPERS */
+function flip(){card.classList.toggle("flipped")}
+function save(){
+    localStorage.setItem("anki_cards",JSON.stringify(cards));
+    localStorage.setItem("anki_stats",JSON.stringify(stats));
+}
+function updateStats(){
+    sTotal.innerText=cards.length;
+    sDue.innerText=cards.filter(c=>c.next<=Date.now()).length;
+    sToday.innerText=stats.today;
+    sStreak.innerText=stats.streak;
+}
+function loadTags(){
+    const tags=[...new Set(cards.flatMap(c=>c.tags))];
+    tagFilter.innerHTML='<option value="all">كل الـ Tags</option>';
+    tags.forEach(t=>{
+        let o=document.createElement("option");
+        o.value=t;o.textContent=t;
+        tagFilter.appendChild(o);
+    });
+}
+function resetAll(){
+    if(confirm("مسح كل البيانات؟")){
+        localStorage.clear();
+        location.reload();
+    }
+}
+
+/* INIT */
+loadTags();
+startSession();
+</script>
+</body>
+</html>
